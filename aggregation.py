@@ -50,13 +50,11 @@ class LFD():
         ds1 = n1/m * (1 - np.mean(mincs1))
         return ds0, ds1
 
-    def aggregate(self, global_model, local_models, ptypes, communication_stats):
+    def aggregate(self, global_model, local_models, ptypes):
         local_weights = [copy.deepcopy(model).state_dict() for model in local_models]
         m = len(local_models)
 
         # 统计上传通信量
-        communication_stats['upload'] += sum(param.numel() for param in local_weights[0].values()) * m * 4  # 假设float32
-
         for i in range(m):
             local_models[i] = list(local_models[i].parameters())
         global_model = list(global_model.parameters())
@@ -89,8 +87,6 @@ class LFD():
             global_weights = average_weights(local_weights, scores)
 
             # 统计下载通信量
-            communication_stats['download'] += sum(param.numel() for param in global_weights.values()) * 4  # 假设float32
-
             return global_weights
 
         # For multiclassification models
@@ -119,8 +115,6 @@ class LFD():
         global_weights = average_weights(local_weights, scores)
 
         # 统计下载通信量
-        communication_stats['download'] += sum(param.numel() for param in global_weights.values()) * 4  # 假设float32
-
         return global_weights
 
 
@@ -130,11 +124,9 @@ class LFD():
 # Takes in grad
 # Compute similarity
 # Get weightings
-def foolsgold(grads, communication_stats):
+def foolsgold(grads):
     n_clients = grads.shape[0]
 
-    # 统计上传通信量
-    communication_stats['upload'] += grads.size * 4  # 假设 float32 类型，每个参数占用 4 字节
 
     cs = smp.cosine_similarity(grads) - np.eye(n_clients)
     maxcs = np.max(cs, axis=1)
@@ -161,8 +153,6 @@ def foolsgold(grads, communication_stats):
     wv[(wv < 0)] = 0
 
     # 统计下载通信量
-    communication_stats['download'] += wv.size * 4  # 假设 float32 类型
-
     return wv
 
 
@@ -172,12 +162,10 @@ class FoolsGold:
         self.wv_history = []
         self.num_peers = num_peers
 
-    def score_gradients(self, local_grads, selected_peers, communication_stats):
+    def score_gradients(self, local_grads, selected_peers):
         m = len(local_grads)
         grad_len = np.array(local_grads[0][-2].cpu().data.numpy().shape).prod()
 
-        # 统计上传通信量
-        communication_stats['upload'] += grad_len * m * 4  # 假设float32
 
         # 初始化 memory，如果尚未创建
         if self.memory is None:
@@ -193,9 +181,6 @@ class FoolsGold:
         wv = foolsgold(self.memory)
         self.wv_history.append(wv)
 
-        # 统计下载通信量
-        communication_stats['download'] += wv.size * 4  # 假设float32
-
         return wv[selected_peers]
 
 
@@ -204,19 +189,18 @@ class Tolpegin:
     def __init__(self):
         pass
 
-    def score(self, global_model, local_models, communication_stats,peers_types,selected_peers):
+    def score(self, global_model, local_models,peers_types,selected_peers):
         global_model = list(global_model.parameters())
         last_g = global_model[-2].cpu().data.numpy()
         m = len(local_models)
 
         # 统计上传通信量
         grad_len = list(local_models[0].parameters())[-2].cpu().data.numpy().size
-        communication_stats['upload'] += grad_len * m * 4  # 假设float32
 
         grads = [None for i in range(m)]
         for i in range(m):
             grad= (last_g - \
-                    list(local_models[i].parameters())[-2].cpu().data.numpy())
+                   list(local_models[i].parameters())[-2].cpu().data.numpy())
             grads[i] = grad
 
         grads = np.array(grads)
@@ -241,7 +225,6 @@ class Tolpegin:
         else:
             scores = labels
         # 统计下载通信量
-        communication_stats['download'] += scores.size * 4  # 假设float32
         for i, pt in enumerate(peers_types):
             print(pt, 'scored', scores[i])
         return scores
@@ -253,7 +236,7 @@ def clipp_model(g_w, w, gamma =  1):
     return w
 
 
-def FLAME(global_model, local_models, noise_scalar, communication_stats):
+def FLAME(global_model, local_models, noise_scalar):
     # Compute number of local models
     m = len(local_models)
 
@@ -262,10 +245,6 @@ def FLAME(global_model, local_models, noise_scalar, communication_stats):
     f_m = np.array(
         [torch.nn.utils.parameters_to_vector(model.parameters()).cpu().data.numpy() for model in local_models])
     grads = g_m - f_m
-
-    # Update communication stats for uploads (each client uploads its model parameters)
-    communication_stats['upload'] += sum(
-        param.numel() for param in local_models[0].parameters()) * m * 4  # assuming float32
 
     # Compute cosine similarity and apply HDBSCAN clustering
     cs = smp.cosine_similarity(grads)
@@ -295,14 +274,11 @@ def FLAME(global_model, local_models, noise_scalar, communication_stats):
         g_w[key] = g_w[key] + noise
 
     # Update communication stats for download (aggregated global model sent back to clients)
-    communication_stats['download'] += sum(param.numel() for param in g_w.values()) * 4  # assuming float32
-
     return g_w
 
 
 #################################################################################################################
-
-def median_opt(input,communication_stats):
+def median_opt(input):
     shape = input.shape
     input = input.sort()[0]
     if shape[-1] % 2 != 0:
@@ -311,8 +287,7 @@ def median_opt(input,communication_stats):
         output = (input[..., int(shape[-1] / 2 - 1)] + input[..., int(shape[-1] / 2)]) / 2.0
     return output
 
-
-def Repeated_Median_Shard(w, communication_stats):
+def Repeated_Median_Shard(w):
     SHARD_SIZE = 100000
     w_med = copy.deepcopy(w[0])
     device = w[0][list(w[0].keys())[0]].device
@@ -323,31 +298,58 @@ def Repeated_Median_Shard(w, communication_stats):
             continue
         total_num = reduce(lambda x, y: x * y, shape)
         y_list = torch.FloatTensor(len(w), total_num).to(device)
-
-        # 上传每个模型的权重
-        communication_stats['upload'] += total_num * len(w) * 4  # 假设每个值为float32
         for i in range(len(w)):
             y_list[i] = torch.reshape(w[i][k], (-1,))
         y = torch.t(y_list)
 
-        # 下载聚合后的结果
-        communication_stats['download'] += total_num * 4
-        # 继续执行计算逻辑...
+        if total_num < SHARD_SIZE:
+            slopes, intercepts = repeated_median(y)
+            y = intercepts + slopes * (len(w) - 1) / 2.0
+        else:
+            y_result = torch.FloatTensor(total_num).to(device)
+            assert total_num == y.shape[0]
+            num_shards = int(math.ceil(total_num / SHARD_SIZE))
+            for i in range(num_shards):
+                y_shard = y[i * SHARD_SIZE: (i + 1) * SHARD_SIZE, ...]
+                slopes_shard, intercepts_shard = repeated_median(y_shard)
+                y_shard = intercepts_shard + slopes_shard * (len(w) - 1) / 2.0
+                y_result[i * SHARD_SIZE: (i + 1) * SHARD_SIZE] = y_shard
+            y = y_result
+        y = y.reshape(shape)
+        w_med[k] = y
+    return w_med
 
 
-def repeated_median(y, communication_stats):
+def repeated_median(y):
     num_models = y.shape[1]
     total_num = y.shape[0]
+    y = y.sort()[0]
+    yyj = y.repeat(1, 1, num_models).reshape(total_num, num_models, num_models)
+    yyi = yyj.transpose(-1, -2)
+    xx = torch.FloatTensor(range(num_models)).to(y.device)
+    xxj = xx.repeat(total_num, num_models, 1)
+    xxi = xxj.transpose(-1, -2) + eps
 
-    # 上传 y 的尺寸
-    communication_stats['upload'] += total_num * num_models * 4  # 假设 float32 类型
-    # 下载中间计算结果
-    communication_stats['download'] += total_num * 4
-    # 执行中间计算...
+    diag = torch.Tensor([float('Inf')] * num_models).to(y.device)
+    diag = torch.diag(diag).repeat(total_num, 1, 1)
+
+    dividor = xxi - xxj + diag
+    slopes = (yyi - yyj) / dividor + diag
+    slopes, _ = slopes.sort()
+    slopes = median_opt(slopes[:, :, :-1])
+    slopes = median_opt(slopes)
+
+    # get intercepts (intercept of median)
+    yy_median = median_opt(y)
+    xx_median = [(num_models - 1) / 2.0] * total_num
+    xx_median = torch.Tensor(xx_median).to(y.device)
+    intercepts = yy_median - slopes * xx_median
+
+    return slopes, intercepts
 
 
 # Repeated Median estimator
-def Repeated_Median(w, communication_stats):
+def Repeated_Median(w):
     cur_time = time.time()
     w_med = copy.deepcopy(w[0])
     device = w[0][list(w[0].keys())[0]].device
@@ -358,21 +360,21 @@ def Repeated_Median(w, communication_stats):
             continue
         total_num = reduce(lambda x, y: x * y, shape)
         y_list = torch.FloatTensor(len(w), total_num).to(device)
-
-        # 统计上传通信量
-        communication_stats['upload'] += total_num * len(w) * 4
-
         for i in range(len(w)):
             y_list[i] = torch.reshape(w[i][k], (-1,))
         y = torch.t(y_list)
 
-        # 统计下载通信量
-        communication_stats['download'] += total_num * 4
-        # 继续执行代码逻辑...
+        slopes, intercepts = repeated_median(y)
+        y = intercepts + slopes * (len(w) - 1) / 2.0
 
+        y = y.reshape(shape)
+        w_med[k] = y
+
+    print('repeated median aggregation took {}s'.format(time.time() - cur_time))
+    return w_med
 
 # simple median estimator
-def simple_median(w, communication_stats):
+def simple_median(w):
     device = w[0][list(w[0].keys())[0]].device
     w_med = copy.deepcopy(w[0])
     for k in w_med.keys():
@@ -381,20 +383,17 @@ def simple_median(w, communication_stats):
             continue
         total_num = reduce(lambda x, y: x * y, shape)
         y_list = torch.FloatTensor(len(w), total_num).to(device)
-
-        # 统计上传通信量
-        communication_stats['upload'] += total_num * len(w) * 4
-
         for i in range(len(w)):
             y_list[i] = torch.reshape(w[i][k], (-1,))
         y = torch.t(y_list)
+        median_result = median_opt(y)
+        assert total_num == len(median_result)
 
-        # 统计下载通信量
-        communication_stats['download'] += total_num * 4
-        # 继续执行代码逻辑...
+        weight = torch.reshape(median_result, shape)
+        w_med[k] = weight
+    return w_med
 
-
-def trimmed_mean(w, communication_stats,trim_ratio):
+def trimmed_mean(w, trim_ratio):
     if trim_ratio == 0:
         return average_weights(w, [1 for i in range(len(w))])
 
@@ -408,46 +407,38 @@ def trimmed_mean(w, communication_stats,trim_ratio):
             continue
         total_num = reduce(lambda x, y: x * y, shape)
         y_list = torch.FloatTensor(len(w), total_num).to(device)
-
-        # 上传每个模型的权重
-        communication_stats['upload'] += total_num * len(w) * 4
         for i in range(len(w)):
             y_list[i] = torch.reshape(w[i][k], (-1,))
         y = torch.t(y_list)
+        y_sorted = y.sort()[0]
+        result = y_sorted[:, trim_num:-trim_num]
+        result = result.mean(dim=-1)
+        assert total_num == len(result)
 
-        # 下载聚合后的结果
-        communication_stats['download'] += total_num * 4
-        # 继续执行代码逻辑...
+        weight = torch.reshape(result, shape)
+        w_med[k] = weight
+    return w_med
 
 
-def average_weights(w, marks,communication_stats):
+# Get average weights
+def average_weights(w, marks):
+    """
+    Returns the average of the weights.
+    """
     w_avg = copy.deepcopy(w[0])
-
-    # Step 1: 计算加权平均
     for key in w_avg.keys():
         w_avg[key] = w_avg[key] * marks[0]
     for key in w_avg.keys():
         for i in range(1, len(w)):
             w_avg[key] += w[i][key] * marks[i]
-        w_avg[key] = w_avg[key] * (1 / sum(marks))
-
-    communication_stats['upload'] += sum(param.numel() for param in w[0].values()) * len(w) * 4  # 假设float32
-    communication_stats['download'] += sum(param.numel() for param in w_avg.values()) * 4  # 聚合后下载
-    # if total_w_all_users is not None and epoch is not None:
-    #     class_means, class_stds = calculate_mean_std(total_w_all_users)
-    # print(f"Epoch {epoch}: Class means: {class_means}")
-    # print(f"Epoch {epoch}: Class stds: {class_stds}")
-
+        w_avg[key] = w_avg[key] *(1/sum(marks))
     return w_avg
 
 
-def Krum(updates,communication_stats=None, f=None , multi=False):
+def Krum(updates, f=None , multi=False):
     n = len(updates)
     # 将每个update的参数向量化
     updates = [torch.nn.utils.parameters_to_vector(update.parameters()) for update in updates]
-
-    # 统计上传的通信量
-    communication_stats['upload'] += sum(param.numel() for param in updates[0]) * n * 4  # 假设每个值是 float32
 
     updates_ = torch.empty([n, len(updates[0])])
     for i in range(n):
@@ -460,49 +451,45 @@ def Krum(updates,communication_stats=None, f=None , multi=False):
     dist = dist.sum(1)
     idxs = dist.argsort()
 
-    # 统计下载的通信量
-    communication_stats['download'] += sum(param.numel() for param in updates[0]) * 4  # 下载聚合后的结果
-
     if multi:
         return idxs[:k]
     else:
         return idxs[0]
 
 ##################################################################
-
-
-def NeuDFL(w, marks, avg_w_all, epoch, total_w_all_users, communication_stats, num_users, peers):
+def NeuDFL(w, marks, epoch, k, num_users, peers):
     """
-    自定义聚合函数：过滤出最可能受到攻击的类别中的表现最差的用户，并对其他用户进行聚合。
+    服务器端自定义聚合函数：过滤出最可能受到攻击的类别中的表现最差的用户，并对其他用户进行聚合。
     """
-    # Step 1: 计算本轮全体用户的平均权重值，找到最可能受到攻击的类别
+    # Step 1: 服务器提取每个用户的 FCL 权重，并按类别展开求和
+    total_w_all_users = np.zeros((len(w[0]['fc.weight']), num_users))  # 假设 fc.weight 是 FCL 权重
+    for idx, peer_w in enumerate(w):
+        fc_weight = peer_w['fc.weight'].cpu().numpy()  # 提取全连接层权重
+        total_w_all_users[:, idx] = np.sum(fc_weight, axis=1)  # 按类别求和
+
+    # Step 2: 计算本轮全体用户的平均权重值，找到最可能受到攻击的类别
+    avg_w_all = np.mean(total_w_all_users, axis=1)
     attacked_class_idx = np.argmin(avg_w_all)
     print(f"Potentially attacked class in epoch {epoch + 1}: Class {attacked_class_idx}")
 
-    # Step 2: 提取该攻击类别中所有用户的权重值
+    # Step 3: 提取该攻击类别中所有用户的权重值
     attacked_class_w = total_w_all_users[attacked_class_idx, :]
-
-    # 统计上传的通信量（所有用户的上传权重）
-    communication_stats['upload'] += sum(param.numel() for param in w[0].values()) * len(w) * 4  # 假设float32
-
-    # Step 3: 计算该类别的均值和方差
     mean_attacked_class_w = np.mean(attacked_class_w)
     std_attacked_class_w = np.std(attacked_class_w)
-
-    threshold = mean_attacked_class_w - 0.5 * std_attacked_class_w  # 可根据需求调整权重
+    threshold = mean_attacked_class_w - k * std_attacked_class_w  # 可根据需求调整权重
+    print(f"Hyperparameter K: {k}")
     print(f"Mean w of attacked class: {mean_attacked_class_w}")
     print(f"Std w of attacked class: {std_attacked_class_w}")
     print(f"Threshold for filtering: {threshold}")
 
     # Step 4: 过滤掉在该攻击类别中表现不佳的用户
     filtered_users_indices = np.where(attacked_class_w < threshold)[0]
+    for i in filtered_users_indices:
+        marks[i] = 0
 
     # Step 5: 获取恶意用户ID
     detected_malicious_users = [peers[i].peer_pseudonym for i in filtered_users_indices]
     actual_malicious_users = [peer.peer_pseudonym for peer in peers if peer.peer_type == 'attacker']
-
-    for i in filtered_users_indices:
-        marks[i] = 0
 
     # Step 6: 执行加权聚合
     w_avg = copy.deepcopy(w[0])
@@ -513,8 +500,50 @@ def NeuDFL(w, marks, avg_w_all, epoch, total_w_all_users, communication_stats, n
             w_avg[key] += w[i][key] * marks[i]
         w_avg[key] = w_avg[key] * (1 / max(1, sum(marks)))
 
-    # 统计下载的通信量（聚合后下载）
-    communication_stats['download'] += sum(param.numel() for param in w_avg.values()) * 4  # 聚合后的模型下载量
-
+    # 返回结果
     return w_avg, detected_malicious_users, actual_malicious_users, attacked_class_idx
+
+
+# def NeuDFL(w, marks, avg_w_all, epoch, total_w_all_users,k , num_users, peers):
+#     """
+#     自定义聚合函数：过滤出最可能受到攻击的类别中的表现最差的用户，并对其他用户进行聚合。
+#     """
+#     # Step 1: 计算本轮全体用户的平均权重值，找到最可能受到攻击的类别
+#     attacked_class_idx = np.argmin(avg_w_all)
+#     print(f"Potentially attacked class in epoch {epoch + 1}: Class {attacked_class_idx}")
+#
+#     # Step 2: 提取该攻击类别中所有用户的权重值
+#     attacked_class_w = total_w_all_users[attacked_class_idx, :]
+#
+#     # 统计上传的通信量（所有用户的上传权重）
+#     # Step 3: 计算该类别的均值和方差
+#     mean_attacked_class_w = np.mean(attacked_class_w)
+#     std_attacked_class_w = np.std(attacked_class_w)
+#     threshold = mean_attacked_class_w - k * std_attacked_class_w  # 可根据需求调整权重
+#     print(f"hypercharacter K : {k}")
+#     print(f"Mean w of attacked class: {mean_attacked_class_w}")
+#     print(f"Std w of attacked class: {std_attacked_class_w}")
+#     print(f"Threshold for filtering: {threshold}")
+#
+#     # Step 4: 过滤掉在该攻击类别中表现不佳的用户
+#     filtered_users_indices = np.where(attacked_class_w < threshold)[0]
+#
+#     # Step 5: 获取恶意用户ID
+#     detected_malicious_users = [peers[i].peer_pseudonym for i in filtered_users_indices]
+#     actual_malicious_users = [peer.peer_pseudonym for peer in peers if peer.peer_type == 'attacker']
+#
+#     for i in filtered_users_indices:
+#         marks[i] = 0
+#
+#     # Step 6: 执行加权聚合
+#     w_avg = copy.deepcopy(w[0])
+#     for key in w_avg.keys():
+#         w_avg[key] = w_avg[key] * marks[0]
+#     for key in w_avg.keys():
+#         for i in range(1, len(w)):
+#             w_avg[key] += w[i][key] * marks[i]
+#         w_avg[key] = w_avg[key] * (1 / max(1, sum(marks)))
+#
+#     # 统计下载的通信量（聚合后下载）
+#     return w_avg, detected_malicious_users, actual_malicious_users, attacked_class_idx
 

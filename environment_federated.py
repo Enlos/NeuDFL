@@ -328,11 +328,7 @@ class FL:
 
     def run_experiment(self, attack_type='no_attack', malicious_behavior_rate=0,
                        source_class=None, target_class=None, rule='fedavg', resume=False):
-        self.communication_stats = {
-            'upload': 0,
-            'download': 0,
-            'extra': 0
-        }
+
         simulation_model = copy.deepcopy(self.global_model)
         print('\n===>Simulation started...')
         lfd = LFD(self.num_classes)
@@ -350,12 +346,10 @@ class FL:
         NUM_CLASSES = self.num_classes
 
         #绘图：
-        mean_w_all_epochs = []
-        std_w_all_epochs = []
+        # mean_w_all_epochs = []
+        # std_w_all_epochs = []
 
         all_w_data = np.zeros((NUM_CLASSES, self.global_rounds))
-        malicious_w_data = np.zeros((NUM_CLASSES, self.global_rounds))
-        honest_w_data = np.zeros((NUM_CLASSES, self.global_rounds))
 
         mapping = {'honest': 'Good update', 'attacker': 'Bad update'}
 
@@ -384,11 +378,11 @@ class FL:
             logging.info(f'\n | Global training round : {epoch + 1}/{self.global_rounds} |\n')
             selected_peers = self.choose_peers()
 
-            # 初始化 total_w_all_users 用于每个 peer 的 w 记录
-            total_w_all_users = np.zeros((NUM_CLASSES, len(selected_peers)))
-            total_w_all = np.zeros((NUM_CLASSES, self.global_rounds))
-            total_w_malicious = np.zeros((NUM_CLASSES, self.global_rounds))
-            total_w_honest = np.zeros((NUM_CLASSES, self.global_rounds))
+            # # 初始化 total_w_all_users 用于每个 peer 的 w 记录
+            # total_w_all_users = np.zeros((NUM_CLASSES, len(selected_peers)))
+            # total_w_all = np.zeros((NUM_CLASSES, self.global_rounds))
+            # total_w_malicious = np.zeros((NUM_CLASSES, self.global_rounds))
+            # total_w_honest = np.zeros((NUM_CLASSES, self.global_rounds))
 
             local_weights, local_grads, local_models, local_losses, performed_attacks = [], [], [], [], []
             peers_types = []
@@ -412,24 +406,24 @@ class FL:
                 # print('{} ends training in global round:{} |\n'.format((self.peers_pseudonyms[peer]), (epoch + 1)))
 
                 peer_v_neural = np.array(self.peers[peer].v_neural)
-                total_w_all[:, epoch] += peer_v_neural
-                total_w_all_users[:, i] = peer_v_neural  # 记录每个用户的 w
-                if self.peers[peer].peer_type == 'honest':
-                    total_w_honest[:, epoch] += peer_v_neural
-                else:
-                    total_w_malicious[:, epoch] += peer_v_neural
+                # total_w_all[:, epoch] += peer_v_neural
+                # total_w_all_users[:, i] = peer_v_neural  # 记录每个用户的 w
+                # if self.peers[peer].peer_type == 'honest':
+                #     total_w_honest[:, epoch] += peer_v_neural
+                # else:
+                #     total_w_malicious[:, epoch] += peer_v_neural
 
-            avg_w_all = total_w_all[:, epoch] / len(selected_peers)
-            avg_w_malicious = total_w_malicious[:, epoch] / max(1, len([p for p in selected_peers if
-                                                                        self.peers[p].peer_type == 'attacker']))
-            avg_w_honest = total_w_honest[:, epoch] / max(1, len([p for p in selected_peers if
-                                                                  self.peers[p].peer_type == 'honest']))
-            all_w_data[:, epoch] = avg_w_all
-            malicious_w_data[:, epoch] = avg_w_malicious
-            honest_w_data[:, epoch] = avg_w_honest
-
-            logging.info(f'Epoch {epoch + 1}: avg_w_malicious: {avg_w_malicious.tolist()}')
-            logging.info(f'Epoch {epoch + 1}: avg_w_honest: {avg_w_honest.tolist()}')
+            # avg_w_all = total_w_all[:, epoch] / len(selected_peers)
+            # avg_w_malicious = total_w_malicious[:, epoch] / max(1, len([p for p in selected_peers if
+            #                                                             self.peers[p].peer_type == 'attacker']))
+            # avg_w_honest = total_w_honest[:, epoch] / max(1, len([p for p in selected_peers if
+            #                                                       self.peers[p].peer_type == 'honest']))
+            # all_w_data[:, epoch] = avg_w_all
+            # malicious_w_data[:, epoch] = avg_w_malicious
+            # honest_w_data[:, epoch] = avg_w_honest
+            #
+            # logging.info(f'Epoch {epoch + 1}: avg_w_malicious: {avg_w_malicious.tolist()}')
+            # logging.info(f'Epoch {epoch + 1}: avg_w_honest: {avg_w_honest.tolist()}')
 
             # loss_avg = sum(local_losses) / len(local_losses)
             # print('Average of peers\' local losses: {:.6f}'.format(loss_avg))
@@ -443,38 +437,37 @@ class FL:
 
             if rule == 'median':
                 cur_time = time.time()
-                global_weights = simple_median(local_weights, self.communication_stats)
+                global_weights = simple_median(local_weights)
                 cpu_runtimes.append(time.time() - cur_time)
 
             elif rule == 'rmedian':
                 cur_time = time.time()
-                global_weights = Repeated_Median_Shard(local_weights,self.communication_stats)
+                global_weights = Repeated_Median_Shard(local_weights)
                 cpu_runtimes.append(time.time() - cur_time)
 
             elif rule == 'tmean':
                 cur_time = time.time()
                 trim_ratio = self.attackers_ratio * self.num_peers / len(selected_peers)
-                global_weights = trimmed_mean(local_weights,  self.communication_stats ,trim_ratio=trim_ratio)
+                global_weights = trimmed_mean(local_weights ,trim_ratio=trim_ratio)
                 cpu_runtimes.append(time.time() - cur_time)
 
             elif rule == 'mkrum':
                 cur_time = time.time()
-                goog_updates = Krum(local_models, self.communication_stats,f=f, multi=True)
+                goog_updates = Krum(local_models, f=f, multi=True)
                 scores[goog_updates] = 1
-                global_weights = average_weights(local_weights, scores,self.communication_stats)
+                global_weights = average_weights(local_weights, scores)
                 cpu_runtimes.append(time.time() - cur_time)
 
             elif rule == 'foolsgold':
                 cur_time = time.time()
                 scores = fg.score_gradients(local_grads, selected_peers)
-                global_weights = average_weights(local_weights, scores,self.communication_stats)
+                global_weights = average_weights(local_weights, scores)
                 cpu_runtimes.append(time.time() - cur_time + t)
 
             elif rule == 'Tolpegin':
                 cur_time = time.time()
                 scores = tolpegin.score(copy.deepcopy(self.global_model),
                                         copy.deepcopy(local_models),
-                                        self.communication_stats,
                                         peers_types=peers_types,
                                         selected_peers=selected_peers)
                 global_weights = average_weights(local_weights, scores)
@@ -485,7 +478,7 @@ class FL:
             elif rule == 'FLAME':
                 cur_time = time.time()
                 global_weights = FLAME(copy.deepcopy(self.global_model).cpu(), copy.deepcopy(local_models),
-                                       noise_scalar,self.communication_stats)
+                                       noise_scalar)
                 t = time.time() - cur_time
                 print('Aggregation took', np.round(t, 4))
                 cpu_runtimes.append(t)
@@ -494,59 +487,56 @@ class FL:
             elif rule == 'lfighter':
                 cur_time = time.time()
                 global_weights = lfd.aggregate(copy.deepcopy(simulation_model), copy.deepcopy(local_models),
-                                               peers_types,self.communication_stats)
+                                               peers_types)
                 cpu_runtimes.append(time.time() - cur_time)
 
             elif rule == 'NeuDFL':
                 if epoch < 10:
                     # Perform regular FedAvg aggregation for the first 10 rounds
-                    global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))],self.communication_stats)
+                    global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))])
                     print(f"Epoch {epoch + 1}: Regular training without filtering")
                     logging.info(f"Epoch {epoch + 1}: Regular training without filtering")
                 else:
                     cur_time = time.time()
-                    global_weights, detected_malicious, actual_malicious ,attacked_class_idx= NeuDFL(local_weights, [1 for i in range(len(local_weights))], avg_w_all, epoch,
-                                        total_w_all_users, self.communication_stats, num_users=len(selected_peers), peers = self.peers)
+                    global_weights, detected, actual, attacked_class = NeuDFL(
+                        w=local_weights,  # 用户上传的本地模型
+                        marks=[1 for _ in range(len(local_weights))],
+                        epoch=epoch,
+                        k=0.5,  # 超参数K
+                        num_users=len(selected_peers),
+                        peers=self.peers
+                    )
                     cpu_runtimes.append(time.time() - cur_time)
 
-                    mean_w_all_epochs.append(np.mean(total_w_all_users[attacked_class_idx, :]))
-                    std_w_all_epochs.append(np.std(total_w_all_users[attacked_class_idx, :]))
-                # 对恶意用户和实际用户排序
-                    sorted_detected_malicious = sorted(detected_malicious)
-                    sorted_actual_malicious = sorted(actual_malicious)
-                # 输出排序后的恶意用户列表
+                    # mean_w_all_epochs.append(np.mean(total_w_all_users[attacked_class_idx, :]))
+                    # std_w_all_epochs.append(np.std(total_w_all_users[attacked_class_idx, :]))
+                    # 对恶意用户和实际用户排序
+                    sorted_detected_malicious = sorted(detected)
+                    sorted_actual_malicious = sorted(actual)
+                    # 输出排序后的恶意用户列表
                     print(f"Epoch {epoch + 1} - Detected malicious users (sorted): {sorted_detected_malicious}")
                     print(f"Epoch {epoch + 1} - Actual malicious users (sorted): {sorted_actual_malicious}")
                     logging.info(f"Epoch {epoch + 1} - Detected malicious users (sorted): {sorted_detected_malicious}")
                     logging.info(f"Epoch {epoch + 1} - Actual malicious users (sorted): {sorted_actual_malicious}")
-                # 计算过滤成功率：检测到的恶意用户数占实际恶意用户的比例
-                # if len(actual_malicious) > 0:
-                #     true_positives = len(set(detected_malicious).intersection(set(actual_malicious)))  # 正确检测到的恶意用户
-                #     accuracy_percentage = true_positives / len(actual_malicious) * 100  # 预测正确的恶意用户占所有实际恶意用户的百分比
-                # else:
-                #     accuracy_percentage = 0  # 如果没有恶意用户，则设为0
 
-                # 输出预测的准确性
-                # print(
-                #     f"Epoch {epoch + 1} - Percentage of actual malicious users correctly detected: {accuracy_percentage:.2f}%\n")
-                    if len(detected_malicious) > 0:
-                        true_positives = len(set(detected_malicious).intersection(set(actual_malicious)))  # 正确检测到的恶意用户
-                        false_positives = len(set(detected_malicious) - set(actual_malicious))  # 错误检测为恶意用户的正常用户
+                    if len(detected) > 0:
+                        true_positives = len(set(detected).intersection(set(actual)))  # 正确检测到的恶意用户
+                        false_positives = len(set(detected) - set(actual))  # 错误检测为恶意用户的正常用户
                         precision = true_positives / (true_positives + false_positives) * 100 if (true_positives + false_positives) > 0 else 0
                     else:
                         precision = 0  # 如果没有检测到恶意用户，则精确率设为0
-                # 输出精确率
+                    # 输出精确率
                     print(f"Epoch {epoch + 1} - Precision: {precision:.2f}%\n")
                     logging.info(f"Epoch {epoch + 1} - Precision: {precision:.2f}%")
 
             elif rule == 'fedavg':
                 cur_time = time.time()
-                global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))],self.communication_stats)
+                global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))])
                 cpu_runtimes.append(time.time() - cur_time)
                 # variance_over_epochs[:, epoch] = class_stds
 
             else:
-                global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))],self.communication_stats)
+                global_weights = average_weights(local_weights, [1 for i in range(len(local_weights))])
                 ##############################################################################################
             # Plot honest vs attackers
             # if attack_type == 'label_flipping' and epoch >= 10 and epoch < 20:
@@ -603,17 +593,9 @@ class FL:
                     source_class_accuracies.append(np.round(r[i] / np.sum(r) * 100, 2))
 
             if epoch == self.global_rounds - 1:
-                print("通信开销统计：")
-                print(f"总上传通信量: {self.communication_stats['upload']} 字节")
-                print(f"总下载通信量: {self.communication_stats['download']} 字节")
-                print(f"额外通信量: {self.communication_stats['extra']} 字节")  # 如果有的话
-
-                logging.info(f"总上传通信量: {self.communication_stats['upload']} 字节")
-                logging.info(f"总下载通信量: {self.communication_stats['download']} 字节")
-                logging.info(f"额外通信量: {self.communication_stats['extra']} 字节")  # 如果有的话
                 print('Last 10 updates results')
                 global_weights = average_weights(last10_updates,
-                                                 np.ones([len(last10_updates)]),self.communication_stats)
+                                                 np.ones([len(last10_updates)]))
                 simulation_model.load_state_dict(global_weights)
                 current_accuracy, test_loss = self.test(simulation_model, self.device, self.test_loader,
                                                         dataset_name=self.dataset_name)
@@ -657,14 +639,14 @@ class FL:
         #               f'{self.dataset_name} Average w of all users with {self.attackers_ratio * 100}% malicious users ',
         #               f'{rule}_all_users_w_trends_{self.attackers_ratio * 100}%_malicious.png')
         # # 使用 np.round 来保留两位小数，然后打印数据
-        print("mean_w_all_epoch: " + np.array2string(np.round(mean_w_all_epochs, 2), separator=","))
-        print("std_w_all_epochs: " + np.array2string(np.round(std_w_all_epochs, 2), separator=","))
-        print("all_users_w_trends: " + np.array2string(np.round(all_w_data, 2), separator=","))
-
-        logging.info(f'honest_w_data: {np.array2string(np.round(honest_w_data, 2), separator=",")}')
-        logging.info(f'malicious_w_data: {np.array2string(np.round(malicious_w_data, 2), separator=",")}')
-        logging.info(f'all_w_data: {np.array2string(np.round(all_w_data, 2), separator=",")}')
-        logging.info(f'std_w_all_epochs: {np.array2string(np.round(std_w_all_epochs, 2), separator=",")}')
+        # print("mean_w_all_epoch: " + np.array2string(np.round(mean_w_all_epochs, 2), separator=","))
+        # print("std_w_all_epochs: " + np.array2string(np.round(std_w_all_epochs, 2), separator=","))
+        # print("all_users_w_trends: " + np.array2string(np.round(all_w_data, 2), separator=","))
+        #
+        # logging.info(f'honest_w_data: {np.array2string(np.round(honest_w_data, 2), separator=",")}')
+        # logging.info(f'malicious_w_data: {np.array2string(np.round(malicious_w_data, 2), separator=",")}')
+        # logging.info(f'all_w_data: {np.array2string(np.round(all_w_data, 2), separator=",")}')
+        # logging.info(f'std_w_all_epochs: {np.array2string(np.round(std_w_all_epochs, 2), separator=",")}')
         logging.info(f'Global accuracies: {global_accuracies}')
         logging.info(f'Class {source_class} accuracies: {source_class_accuracies}')
         logging.info(f'Test loss: {test_losses}')
